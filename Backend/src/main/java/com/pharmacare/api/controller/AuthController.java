@@ -8,6 +8,7 @@ import com.pharmacare.api.dto.PharmacySignupRequestDto;
 import com.pharmacare.api.dto.PharmacyStaffDto;
 import com.pharmacare.api.dto.SignupRequestDto;
 import com.pharmacare.api.dto.UserDto;
+import com.pharmacare.api.dto.ValidatedUserDto;
 import com.pharmacare.api.model.ERole;
 import com.pharmacare.api.model.Pharmacy;
 import com.pharmacare.api.model.PharmacyStaff;
@@ -65,10 +66,24 @@ public class AuthController {
                     )
             );
 
+            UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
+            
+            // --- Add Role Check ---
+            boolean isRegularUser = userPrincipal.getAuthorities().stream()
+                    .anyMatch(grantedAuthority -> grantedAuthority.getAuthority().equals(ERole.ROLE_USER.name()));
+            boolean isPharmacyStaff = userPrincipal.getAuthorities().stream()
+                    .anyMatch(grantedAuthority -> grantedAuthority.getAuthority().equals(ERole.ROLE_PHARMACY.name()));
+
+            if (!isRegularUser || isPharmacyStaff) { // Must be USER and explicitly NOT PHARMACY
+                logger.warn("Login attempt failed for user {} via /auth/login: Incorrect role.", loginRequest.getEmail());
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(new ErrorResponseDto("Unauthorized: Access denied for this user type."));
+            }
+            // --- End Role Check ---
+
             SecurityContextHolder.getContext().setAuthentication(authentication);
             String jwt = tokenProvider.generateToken(authentication);
             
-            UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
             UserDto userDto = mapToUserDto(userRepository.findById(userPrincipal.getId()).orElseThrow());
 
             return ResponseEntity.ok(new AuthResponseDto(jwt, userDto));
@@ -252,44 +267,51 @@ public class AuthController {
     @GetMapping("/validate")
     public ResponseEntity<?> validateToken() {
         try {
-            logger.info("Token validation request received!");
+            logger.debug("Token validation request received.");
             Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+            if (authentication == null || !authentication.isAuthenticated() || !(authentication.getPrincipal() instanceof UserPrincipal)) {
+                 logger.warn("Validation failed: No valid authentication found in context.");
+                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                         .body(new ErrorResponseDto("Token validation failed: Invalid authentication context."));
+            }
+            
             UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
+            logger.debug("Validating token for user ID: {}", userPrincipal.getId());
             
-            logger.info("Token validation for user ID: {}", userPrincipal.getId());
-            
+            // Fetch the full User entity to get roles reliably
             User user = userRepository.findById(userPrincipal.getId())
-                    .orElseThrow(() -> new RuntimeException("User not found"));
+                    .orElseThrow(() -> new RuntimeException("User not found during validation for ID: " + userPrincipal.getId()));
             
-            UserDto userDto = mapToUserDto(user);
-            
-            // Determine if it's a regular user or pharmacy staff
-            boolean isPharmacy = userDto.getRoles().contains(ERole.ROLE_PHARMACY.name());
+            // Check roles from the User entity
+            boolean isPharmacy = user.getRoles().stream()
+                                   .anyMatch(role -> role.getName() == ERole.ROLE_PHARMACY);
+            boolean isUser = user.getRoles().stream()
+                                   .anyMatch(role -> role.getName() == ERole.ROLE_USER);
 
             if (isPharmacy) {
-                // Fetch pharmacy staff details
-                 List<PharmacyStaff> staffAssignments = pharmacyStaffRepository.findByUserId(user.getId());
-                 if (staffAssignments.isEmpty()) {
-                     // It's possible a user has the role but no assignment yet, handle appropriately
-                     // For now, we might log a warning or return without staff details
-                     logger.warn("User ID {} has ROLE_PHARMACY but no PharmacyStaff assignment found.", user.getId());
-                     // Depending on requirements, you might throw an error or just return userDto
-                     // Let's return userDto for now, assuming the role itself might be enough in some contexts
-                     return ResponseEntity.ok(userDto); 
-                     // Alternatively, throw:
-                     // throw new RuntimeException("Pharmacy staff details not found for user ID: " + user.getId());
-                 }
-                
-                // Assuming the first assignment is relevant if multiple exist
-                PharmacyStaff staff = staffAssignments.get(0); 
+                logger.debug("User ID {} has ROLE_PHARMACY. Fetching staff details.", user.getId());
+                List<PharmacyStaff> staffAssignments = pharmacyStaffRepository.findByUserId(user.getId());
+                if (staffAssignments.isEmpty()) {
+                    logger.error("Inconsistency: User ID {} has ROLE_PHARMACY but no PharmacyStaff assignment found.", user.getId());
+                    // Return error - shouldn't happen if signup is correct
+                    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                            .body(new ErrorResponseDto("User role inconsistency detected."));
+                }
+                PharmacyStaff staff = staffAssignments.get(0); // Assuming first is primary
                 PharmacyStaffDto staffDto = mapToPharmacyStaffDto(staff);
-                logger.info("Found pharmacy staff details for user ID: {}", user.getId());
-                // TODO: Decide if we should return a different DTO or enrich UserDto
-                // For now, just returning the UserDto, frontend can check roles
-                return ResponseEntity.ok(userDto); 
+                logger.debug("Returning PharmacyStaff details for user ID: {}", user.getId());
+                return ResponseEntity.ok(new ValidatedUserDto("pharmacy", staffDto));
+                 
+            } else if (isUser) {
+                logger.debug("User ID {} has ROLE_USER. Returning user details.", user.getId());
+                UserDto userDto = mapToUserDto(user);
+                return ResponseEntity.ok(new ValidatedUserDto("user", userDto));
             } else {
-                logger.info("User ID {} is not a pharmacy staff", user.getId());
-                return ResponseEntity.ok(userDto);
+                 // Handle cases with other roles (e.g., ADMIN) or no expected roles
+                 logger.warn("User ID {} has unrecognized role combination during validation.", user.getId());
+                 // For now, treat as unauthorized for standard flows
+                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                         .body(new ErrorResponseDto("Token validation failed: User role not supported for this context."));
             }
 
         } catch (Exception e) {

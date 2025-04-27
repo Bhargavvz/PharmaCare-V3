@@ -22,6 +22,9 @@ interface Medication {
 
 interface ReminderResponse {
   id: number;
+  medicationId?: number;
+  medicationName?: string;
+  medicationDosage?: string;
   medication?: {
     id: number;
     name: string;
@@ -40,7 +43,7 @@ const Reminders: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'completed'>('all');
   const [showAddModal, setShowAddModal] = useState(false);
   const [newReminder, setNewReminder] = useState({
-    medicationId: 0,
+    medicationId: undefined as number | undefined,
     reminderTime: format(new Date(new Date().setHours(new Date().getHours() + 1, 0, 0, 0)), "yyyy-MM-dd'T'HH:mm"),
     notes: '',
   });
@@ -54,20 +57,51 @@ const Reminders: React.FC = () => {
     try {
       setIsLoading(true);
       const response = await reminderService.getAll();
+      console.log('Raw reminders response:', response);
       
       const formattedReminders = response.map((reminder: ReminderResponse): Reminder => {
         const parsedTime = reminder.reminderTime ? parseISO(reminder.reminderTime) : null;
+        
+        // Extract medication info with fallbacks
+        const medicationId = reminder.medicationId || reminder.medication?.id || 0;
+        let medicationName = 'Unknown Medication';
+        let dosage = '';
+        
+        // Try to get medication name from various possible sources
+        if (reminder.medicationName) {
+          medicationName = reminder.medicationName;
+        } else if (reminder.medication?.name) {
+          medicationName = reminder.medication.name;
+        }
+        
+        // Try to get dosage from various possible sources
+        if (reminder.medicationDosage) {
+          dosage = reminder.medicationDosage;
+        } else if (reminder.medication?.dosage) {
+          dosage = reminder.medication.dosage;
+        }
+        
+        // Find matching medication in our local medications list for more details
+        if (medicationId > 0 && (!medicationName || medicationName === 'Unknown Medication')) {
+          const matchingMed = medications.find(med => med.id === medicationId);
+          if (matchingMed) {
+            medicationName = matchingMed.name;
+            dosage = matchingMed.dosage;
+          }
+        }
+        
         return {
           id: reminder.id,
-          medicationId: reminder.medication?.id || 0,
-          medicationName: reminder.medication?.name || 'Unknown Medication',
-          dosage: reminder.medication?.dosage || '',
+          medicationId: medicationId,
+          medicationName: medicationName,
+          dosage: dosage,
           reminderTime: parsedTime && isValid(parsedTime) ? format(parsedTime, "yyyy-MM-dd'T'HH:mm") : '',
           notes: reminder.notes || undefined,
           completed: reminder.completed || false,
         };
       });
       
+      console.log('Formatted reminders:', formattedReminders);
       setReminders(formattedReminders);
     } catch (error) {
       console.error('Error fetching reminders:', error);
@@ -80,7 +114,15 @@ const Reminders: React.FC = () => {
   const fetchMedications = async () => {
     try {
       const response = await medicationService.getAll();
-      setMedications(response.filter((med: any) => med.active));
+      const activeMeds = response.filter((med: any) => med.active);
+      setMedications(activeMeds);
+      
+      if (activeMeds.length > 0) {
+        setNewReminder(prev => ({
+          ...prev,
+          medicationId: activeMeds[0].id
+        }));
+      }
     } catch (error) {
       console.error('Error fetching medications:', error);
     }
@@ -98,45 +140,111 @@ const Reminders: React.FC = () => {
       return;
     }
     
+    console.log('Submitting reminder with data:', newReminder);
+    
     try {
-      await reminderService.create({
-        medicationId: newReminder.medicationId,
-        reminderTime: new Date(newReminder.reminderTime).toISOString(),
-        notes: newReminder.notes,
-        completed: false,
-      });
+      // Ensure medicationId is a number
+      const medicationId = Number(newReminder.medicationId);
+      
+      // Safely parse the date
+      let reminderTimeISO;
+      try {
+        const reminderDate = new Date(newReminder.reminderTime);
+        if (isNaN(reminderDate.getTime())) {
+          throw new Error('Invalid date format');
+        }
+        reminderTimeISO = reminderDate.toISOString();
+      } catch (dateError) {
+        console.error('Error parsing reminder date:', dateError);
+        toast.error('Invalid date format. Please select a valid date and time.');
+        return;
+      }
+      
+      const reminderToCreate = {
+        medicationId: medicationId,
+        reminderTime: reminderTimeISO,
+        notes: newReminder.notes || '',
+        completed: false
+      };
+      
+      console.log('Formatted reminder data for API:', reminderToCreate);
+      
+      const result = await reminderService.create(reminderToCreate);
+      console.log('Reminder created successfully:', result);
       
       setShowAddModal(false);
       setNewReminder({
-        medicationId: 0,
+        medicationId: medications.length > 0 ? medications[0].id : undefined,
         reminderTime: format(new Date(new Date().setHours(new Date().getHours() + 1, 0, 0, 0)), "yyyy-MM-dd'T'HH:mm"),
         notes: '',
       });
       
       toast.success('Reminder added successfully');
       fetchReminders();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error adding reminder:', error);
-      toast.error('Failed to add reminder');
+      if (error.response) {
+        console.error('Response status:', error.response.status);
+        console.error('Response data:', error.response.data);
+
+        if (error.response.data && error.response.data.message) {
+          toast.error(`Failed to add reminder: ${error.response.data.message}`);
+        } else {
+          toast.error('Failed to add reminder. Server error occurred.');
+        }
+      } else if (error.request) {
+        // The request was made but no response was received
+        toast.error('Failed to connect to the server. Please check your network connection.');
+      } else {
+        // Something happened in setting up the request
+        toast.error(`Failed to add reminder: ${error.message}`);
+      }
     }
   };
 
   const handleToggleComplete = async (reminder: Reminder) => {
     const newStatus = !reminder.completed;
     try {
+      // Optimistically update UI
       setReminders(reminders.map(r => r.id === reminder.id ? { ...r, completed: newStatus } : r));
 
+      console.log(`Toggling reminder ${reminder.id} to ${newStatus ? 'completed' : 'pending'}`);
+      
       if (newStatus) {
-        await reminderService.markCompleted(reminder.id);
+        // Mark as completed
+        const result = await reminderService.markCompleted(reminder.id);
+        console.log('Reminder marked complete response:', result);
       } else {
-        await reminderService.update(reminder.id, { completed: newStatus });
+        // Mark as pending
+        const result = await reminderService.update(reminder.id, { completed: newStatus });
+        console.log('Reminder marked pending response:', result);
       }
       
       toast.success(newStatus ? 'Reminder marked complete' : 'Reminder marked pending');
-    } catch (error) {
-      console.error('Error updating reminder:', error);
-      toast.error('Failed to update reminder status');
+      
+      // Refresh the reminders list to ensure we have the latest data
+      fetchReminders();
+    } catch (error: any) {
+      console.error('Error updating reminder status:', error);
+      
+      // Revert optimistic update
       setReminders(reminders.map(r => r.id === reminder.id ? { ...r, completed: !newStatus } : r));
+      
+      // Detailed error handling
+      if (error.response) {
+        console.error('Response status:', error.response.status);
+        console.error('Response data:', error.response.data);
+        
+        if (error.response.data && error.response.data.message) {
+          toast.error(`Failed to update reminder: ${error.response.data.message}`);
+        } else {
+          toast.error(`Server error (${error.response.status}): Failed to update reminder status`);
+        }
+      } else if (error.request) {
+        toast.error('Network error: Failed to connect to server');
+      } else {
+        toast.error(`Error: ${error.message}`);
+      }
     }
   };
 
@@ -215,7 +323,13 @@ const Reminders: React.FC = () => {
         </div>
         <button
           onClick={() => setShowAddModal(true)}
-          className="inline-flex items-center px-4 py-2 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-teal-600 hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500 transition-colors duration-200"
+          disabled={medications.length === 0}
+          className={`inline-flex items-center px-4 py-2 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white ${
+            medications.length > 0 
+              ? "bg-teal-600 hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500" 
+              : "bg-gray-400 cursor-not-allowed"
+          } transition-colors duration-200`}
+          title={medications.length === 0 ? "Add a medication first" : "Add a reminder"}
         >
           <Plus className="h-5 w-5 mr-2" />
           Add Reminder
@@ -330,11 +444,11 @@ const Reminders: React.FC = () => {
                 : "You haven't set any reminders yet."}
             </p>
             <button
-              onClick={() => setShowAddModal(true)}
+              onClick={() => medications.length > 0 ? setShowAddModal(true) : window.location.href = '/dashboard/medications'}
               className="mt-6 inline-flex items-center px-4 py-2 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-teal-600 hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500"
             >
               <Plus className="h-5 w-5 mr-2" />
-              Set Reminder
+              {medications.length > 0 ? "Set Reminder" : "Add Medication First"}
             </button>
           </div>
         )}
@@ -357,23 +471,28 @@ const Reminders: React.FC = () => {
                     <label htmlFor="medication" className="block text-sm font-medium text-gray-700 mb-1">Medication <span className="text-red-500">*</span></label>
                     <select
                       id="medication"
-                      value={newReminder.medicationId}
+                      value={newReminder.medicationId || ""}
                       onChange={(e) => setNewReminder({ ...newReminder, medicationId: parseInt(e.target.value) })}
                       className="mt-1 block w-full pl-3 pr-10 py-2 text-base border border-gray-300 focus:outline-none focus:ring-teal-500 focus:border-teal-500 sm:text-sm rounded-md transition duration-150 ease-in-out"
                       required
                     >
-                      <option value="" disabled>Select a medication...</option>
-                      {medications.length > 0 ? (
-                        medications.map((medication) => (
-                          <option key={medication.id} value={medication.id}>
-                            {medication.name} ({medication.dosage})
-                          </option>
-                        ))
-                      ) : (
-                        <option value="" disabled>No active medications found</option>
+                      {medications.length === 0 && (
+                        <option value="" disabled>No active medications found - add a medication first</option>
                       )}
+                      {medications.length > 0 && medications.map((medication) => (
+                        <option key={medication.id} value={medication.id}>
+                          {medication.name} ({medication.dosage})
+                        </option>
+                      ))}
                     </select>
                   </div>
+                  {medications.length === 0 && (
+                    <div className="mt-2">
+                      <a href="/dashboard/medications" className="text-sm text-teal-600 hover:text-teal-500">
+                        Add a medication first
+                      </a>
+                    </div>
+                  )}
                   <div>
                     <label htmlFor="reminderTime" className="block text-sm font-medium text-gray-700 mb-1">Reminder Time <span className="text-red-500">*</span></label>
                     <input

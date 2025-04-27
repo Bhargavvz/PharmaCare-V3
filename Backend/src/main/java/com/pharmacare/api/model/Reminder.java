@@ -1,6 +1,7 @@
 package com.pharmacare.api.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
@@ -44,6 +45,7 @@ public class Reminder {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false)
+    @JsonIgnore
     private User user;
 
     @CreatedDate
@@ -56,7 +58,18 @@ public class Reminder {
         return medication != null ? medication.getId() : medicationId;
     }
 
+    @JsonProperty("medicationId")
     public void setMedicationId(Long medicationId) {
         this.medicationId = medicationId;
+    }
+
+    @JsonProperty("medicationName")
+    public String getMedicationName() {
+        return medication != null ? medication.getName() : null;
+    }
+
+    @JsonProperty("medicationDosage")
+    public String getMedicationDosage() {
+        return medication != null ? medication.getDosage() : null;
     }
 } 

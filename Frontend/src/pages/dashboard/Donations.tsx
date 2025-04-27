@@ -29,6 +29,7 @@ interface Donation {
   notes?: string;
   donationDate: string;
   completedDate?: string;
+  donorName?: string;
 }
 
 const Donations: React.FC = () => {
@@ -56,6 +57,7 @@ const Donations: React.FC = () => {
     try {
       setIsLoading(true);
       const response = await donationService.getAll();
+      console.log('Fetched donations:', response);
       setDonations(response);
     } catch (error) {
       console.error('Error fetching donations:', error);
@@ -69,11 +71,13 @@ const Donations: React.FC = () => {
     e.preventDefault();
     try {
       await donationService.create({
-        medicationName: newDonation.medicineName,
+        medicineName: newDonation.medicineName,
         quantity: Number(newDonation.quantity),
+        expiryDate: newDonation.expiryDate,
+        location: newDonation.location,
+        organization: newDonation.organization,
         notes: newDonation.notes,
-        donationDate: new Date().toISOString(),
-        status: 'pending',
+        status: 'PENDING'
       });
       
       setIsAddModalOpen(false);
@@ -98,7 +102,7 @@ const Donations: React.FC = () => {
     if (!selectedDonation) return;
     
     try {
-      await donationService.updateStatus(selectedDonation.id, 'cancelled');
+      await donationService.updateStatus(selectedDonation.id, 'REJECTED');
       setShowCancelModal(false);
       setSelectedDonation(null);
       toast.success('Donation cancelled successfully');
@@ -110,18 +114,32 @@ const Donations: React.FC = () => {
   };
 
   const getStatusColor = (status: string) => {
-    switch (status.toLowerCase()) {
-      case 'pending':
+    switch (status.toUpperCase()) {
+      case 'PENDING':
         return 'bg-yellow-100 text-yellow-800';
-      case 'accepted':
+      case 'ACCEPTED':
         return 'bg-teal-100 text-teal-800';
-      case 'completed':
+      case 'COMPLETED':
         return 'bg-green-100 text-green-800';
-      case 'rejected':
-      case 'cancelled':
+      case 'REJECTED':
         return 'bg-red-100 text-red-800';
       default:
         return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const getDisplayStatus = (status: string) => {
+    switch (status.toUpperCase()) {
+      case 'PENDING':
+        return 'Pending';
+      case 'ACCEPTED':
+        return 'Accepted';
+      case 'COMPLETED':
+        return 'Completed';
+      case 'REJECTED':
+        return 'Rejected';
+      default:
+        return status;
     }
   };
 
@@ -133,7 +151,7 @@ const Donations: React.FC = () => {
       (donation.notes && donation.notes.toLowerCase().includes(searchQuery.toLowerCase()));
     
     const matchesStatus = 
-      activeTab === 'available' ? donation.status.toLowerCase() === 'pending' : donation.status.toLowerCase() !== 'pending';
+      activeTab === 'available' ? donation.status === 'PENDING' : donation.status !== 'PENDING';
     
     return matchesSearch && matchesStatus;
   });
@@ -164,7 +182,7 @@ const Donations: React.FC = () => {
             </div>
             <div className="ml-4">
               <p className="text-sm font-medium text-gray-500">Total Donations</p>
-              <p className="text-2xl font-semibold text-gray-900">156</p>
+              <p className="text-2xl font-semibold text-gray-900">{donations.length}</p>
             </div>
           </div>
         </div>
@@ -175,7 +193,9 @@ const Donations: React.FC = () => {
             </div>
             <div className="ml-4">
               <p className="text-sm font-medium text-gray-500">Medicines Donated</p>
-              <p className="text-2xl font-semibold text-gray-900">2,450</p>
+              <p className="text-2xl font-semibold text-gray-900">
+                {donations.reduce((total, donation) => total + donation.quantity, 0)}
+              </p>
             </div>
           </div>
         </div>
@@ -186,7 +206,9 @@ const Donations: React.FC = () => {
             </div>
             <div className="ml-4">
               <p className="text-sm font-medium text-gray-500">Collection Centers</p>
-              <p className="text-2xl font-semibold text-gray-900">12</p>
+              <p className="text-2xl font-semibold text-gray-900">
+                {new Set(donations.map(d => d.location)).size}
+              </p>
             </div>
           </div>
         </div>
@@ -257,7 +279,7 @@ const Donations: React.FC = () => {
                           donation.status
                         )}`}
                       >
-                        {donation.status}
+                        {getDisplayStatus(donation.status)}
                       </span>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-sm text-gray-500">
@@ -275,12 +297,24 @@ const Donations: React.FC = () => {
                       </div>
                       <div className="flex items-center">
                         <Users className="w-5 h-5 mr-2 text-gray-400" />
-                        {donation.organization}
+                        {donation.donorName || 'Personal Donation'}
                       </div>
                     </div>
                   </div>
-                  <button className="ml-6 p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
-                    <ChevronRight className="w-5 h-5" />
+                  <button 
+                    className="ml-6 p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+                    onClick={() => {
+                      if (donation.status === 'PENDING') {
+                        setSelectedDonation(donation);
+                        setShowCancelModal(true);
+                      }
+                    }}
+                  >
+                    {donation.status === 'PENDING' ? (
+                      <X className="w-5 h-5 text-red-500" />
+                    ) : (
+                      <ChevronRight className="w-5 h-5" />
+                    )}
                   </button>
                 </div>
               </div>
@@ -370,6 +404,115 @@ const Donations: React.FC = () => {
                 >
                   Keep Donation
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isAddModalOpen && (
+        <div className="fixed inset-0 overflow-y-auto z-50">
+          <div className="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div
+              className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
+              onClick={() => setIsAddModalOpen(false)}
+            ></div>
+            <span className="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-medium text-gray-900">Add New Donation</h3>
+                  <button
+                    onClick={() => setIsAddModalOpen(false)}
+                    className="text-gray-400 hover:text-gray-500"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+                <form onSubmit={handleAddDonation}>
+                  <div className="space-y-4">
+                    <div>
+                      <label htmlFor="medicineName" className="block text-sm font-medium text-gray-700">Medicine Name*</label>
+                      <input
+                        type="text"
+                        id="medicineName"
+                        value={newDonation.medicineName}
+                        onChange={(e) => setNewDonation({...newDonation, medicineName: e.target.value})}
+                        required
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-teal-500 focus:border-teal-500 sm:text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="quantity" className="block text-sm font-medium text-gray-700">Quantity*</label>
+                      <input
+                        type="number"
+                        id="quantity"
+                        min="1"
+                        value={newDonation.quantity}
+                        onChange={(e) => setNewDonation({...newDonation, quantity: parseInt(e.target.value, 10)})}
+                        required
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-teal-500 focus:border-teal-500 sm:text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="expiryDate" className="block text-sm font-medium text-gray-700">Expiry Date*</label>
+                      <input
+                        type="date"
+                        id="expiryDate"
+                        value={newDonation.expiryDate}
+                        onChange={(e) => setNewDonation({...newDonation, expiryDate: e.target.value})}
+                        required
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-teal-500 focus:border-teal-500 sm:text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="location" className="block text-sm font-medium text-gray-700">Location*</label>
+                      <input
+                        type="text"
+                        id="location"
+                        value={newDonation.location}
+                        onChange={(e) => setNewDonation({...newDonation, location: e.target.value})}
+                        required
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-teal-500 focus:border-teal-500 sm:text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="organization" className="block text-sm font-medium text-gray-700">Organization</label>
+                      <input
+                        type="text"
+                        id="organization"
+                        value={newDonation.organization}
+                        onChange={(e) => setNewDonation({...newDonation, organization: e.target.value})}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-teal-500 focus:border-teal-500 sm:text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="notes" className="block text-sm font-medium text-gray-700">Notes</label>
+                      <textarea
+                        id="notes"
+                        value={newDonation.notes}
+                        onChange={(e) => setNewDonation({...newDonation, notes: e.target.value})}
+                        rows={3}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-teal-500 focus:border-teal-500 sm:text-sm"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-5 sm:mt-6 sm:flex sm:flex-row-reverse">
+                    <button
+                      type="submit"
+                      className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-teal-600 text-base font-medium text-white hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500 sm:ml-3 sm:w-auto sm:text-sm"
+                    >
+                      Add Donation
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsAddModalOpen(false)}
+                      className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
               </div>
             </div>
           </div>

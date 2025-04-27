@@ -23,11 +23,34 @@ const PharmacyLogin: React.FC = () => {
     password: '',
   });
   const [loading, setLoading] = useState(false);
+  const [hasCorruptedState, setHasCorruptedState] = useState(false);
+  const [loginSuccess, setLoginSuccess] = useState(false);
+
+  useEffect(() => {
+    // Check for corrupted state - userData without token
+    const userData = localStorage.getItem('userData');
+    const token = localStorage.getItem('token');
+    if (userData && !token) {
+      console.log('PharmacyLogin: Detected corrupted state - userData without token');
+      setHasCorruptedState(true);
+    }
+  }, []);
+
+  const clearStorageData = () => {
+    localStorage.removeItem('userData');
+    localStorage.removeItem('token');
+    setCurrentUser(null);
+    setToken(null);
+    setHasCorruptedState(false);
+    toast.success('Session data cleared. You can now log in again.');
+  };
 
   // Redirect if already logged in
   useEffect(() => {
-    if (currentUser && isPharmacyStaffUser(currentUser)) {
-      navigate('/pharmacy/dashboard');
+    const token = localStorage.getItem('token');
+    if (currentUser && isPharmacyStaffUser(currentUser) && token) {
+      console.log('Already logged in as pharmacy staff with valid token, redirecting to dashboard');
+      window.location.href = '/pharmacy/dashboard?justLoggedIn=true';
     }
   }, [currentUser, navigate]);
 
@@ -41,6 +64,7 @@ const PharmacyLogin: React.FC = () => {
     
     setLoading(true);
     try {
+      console.log('Attempting pharmacy login...');
       const response = await fetch(`${API_URL}/auth/pharmacy/login`, {
         method: 'POST',
         headers: {
@@ -58,13 +82,99 @@ const PharmacyLogin: React.FC = () => {
         throw new Error(data.message || 'Invalid credentials or not authorized');
       }
 
-      setCurrentUser(data.pharmacyStaff);
+      console.log('Pharmacy login successful, response data:', JSON.stringify(data, null, 2));
+      
+      // Validate pharmacy staff data structure
+      if (!data.pharmacyStaff || !data.token) {
+        throw new Error('Invalid response format from server');
+      }
+      
+      // First clear any existing data
+      localStorage.removeItem('token');
+      localStorage.removeItem('userData');
+      
+      // Log pharmacy staff data for debugging
+      console.log('PharmacyStaff data structure:', JSON.stringify(data.pharmacyStaff, null, 2));
+      
+      // Create the enhanced staff data with a clear type marker
+      const enhancedPharmacyStaff = {
+        ...data.pharmacyStaff,
+        userType: 'pharmacy'
+      };
+      
+      // Ensure it has the required pharmacyId property
+      if (!enhancedPharmacyStaff.pharmacyId) {
+        console.warn('PharmacyStaff data is missing pharmacyId property, attempting to fix');
+        
+        // If pharmacy staff object doesn't have pharmacyId but has pharmacy information, restructure it
+        if (data.pharmacyStaff.pharmacy && data.pharmacyStaff.pharmacy.id) {
+          console.log('Adding pharmacyId from pharmacy.id');
+          enhancedPharmacyStaff.pharmacyId = data.pharmacyStaff.pharmacy.id;
+        } else if (data.pharmacyId) {
+          console.log('Adding pharmacyId from response root');
+          enhancedPharmacyStaff.pharmacyId = data.pharmacyId;
+        } else {
+          throw new Error('Cannot determine pharmacy ID from server response');
+        }
+      }
+      
+      // Direct localStorage update first to ensure token is stored
+      console.log('Setting token in localStorage:', data.token.substring(0, 20) + '...');
+      localStorage.setItem('token', data.token);
+      console.log('Setting userData in localStorage');
+      localStorage.setItem('userData', JSON.stringify(enhancedPharmacyStaff));
+      
+      // Verify data was stored successfully
+      const storedToken = localStorage.getItem('token');
+      const storedUserData = localStorage.getItem('userData');
+      console.log('Verification - Token saved:', !!storedToken, 'UserData saved:', !!storedUserData);
+      
+      // Then update application state
       setToken(data.token);
+      setCurrentUser(enhancedPharmacyStaff);
+      
       toast.success('Login successful! Welcome back!');
-      navigate('/pharmacy/dashboard');
+      
+      // FORCE REDIRECT WITH TIMEOUT to ensure storage has synchronized
+      console.log('Scheduling redirect to pharmacy dashboard...');
+      
+      // We'll try multiple redirect approaches with delays to ensure one works
+      setTimeout(() => {
+        console.log('REDIRECT ATTEMPT 1: Using window.location.href');
+        window.location.href = '/pharmacy/dashboard?justLoggedIn=true';
+      }, 100);
+      
+      // Backup redirect in case the first one fails
+      setTimeout(() => {
+        const isRedirected = window.location.pathname.includes('/pharmacy/dashboard');
+        if (!isRedirected) {
+          console.log('REDIRECT ATTEMPT 2: First redirect failed, trying window.location.replace');
+          window.location.replace('/pharmacy/dashboard?justLoggedIn=true');
+        }
+      }, 500);
+      
+      // Final fallback redirect
+      setTimeout(() => {
+        const isRedirected = window.location.pathname.includes('/pharmacy/dashboard');
+        if (!isRedirected) {
+          console.log('REDIRECT ATTEMPT 3: Second redirect failed, trying document.location');
+          document.location.href = '/pharmacy/dashboard?justLoggedIn=true';
+          
+          // If this also fails, show an alert to the user
+          setTimeout(() => {
+            if (!window.location.pathname.includes('/pharmacy/dashboard')) {
+              alert('Automatic redirect failed. Please click OK to go to the dashboard.');
+              window.location.href = '/pharmacy/dashboard?justLoggedIn=true';
+            }
+          }, 1000);
+        }
+      }, 1000);
+      
+      setLoginSuccess(true);
     } catch (error) {
       console.error('Pharmacy login error:', error);
       toast.error(error instanceof Error ? error.message : 'Login failed');
+      setLoginSuccess(false);
     } finally {
       setLoading(false);
     }
@@ -85,6 +195,52 @@ const PharmacyLogin: React.FC = () => {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 via-white to-teal-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
+        {hasCorruptedState && (
+          <div className="bg-amber-50 border-l-4 border-amber-500 p-4 rounded-md">
+            <div className="flex">
+              <div className="flex-shrink-0">
+                <svg className="h-5 w-5 text-amber-500" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <p className="text-sm text-amber-700">
+                  We detected a problem with your session data. 
+                </p>
+                <button 
+                  onClick={clearStorageData}
+                  className="mt-2 text-sm font-medium text-amber-700 hover:text-amber-600"
+                >
+                  Click here to fix it
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {loginSuccess && (
+          <div className="bg-green-50 border-l-4 border-green-500 p-4 rounded-md">
+            <div className="flex">
+              <div className="flex-shrink-0">
+                <svg className="h-5 w-5 text-green-500" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <p className="text-sm text-green-700">
+                  Login successful! If you are not redirected automatically:
+                </p>
+                <a 
+                  href="/pharmacy/dashboard?bypass=true"
+                  className="mt-2 text-sm font-medium text-green-700 hover:text-green-600"
+                >
+                  Click here to go to the dashboard
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
+        
         <div className="text-center">
           <Link to="/" className="inline-flex items-center mb-4">
              <Building2 className="h-8 w-8 text-emerald-600" />

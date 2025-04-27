@@ -1,6 +1,8 @@
 package com.pharmacare.api.controller;
 
+import com.pharmacare.api.dto.CreateReminderDto;
 import com.pharmacare.api.dto.ErrorResponseDto;
+import com.pharmacare.api.dto.ReminderDto;
 import com.pharmacare.api.exception.ResourceNotFoundException;
 import com.pharmacare.api.model.Medication;
 import com.pharmacare.api.model.Reminder;
@@ -21,6 +23,7 @@ import org.springframework.web.bind.annotation.*;
 import jakarta.validation.Valid;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/reminders")
@@ -42,6 +45,7 @@ public class ReminderController {
                     .orElseThrow(() -> new ResourceNotFoundException("User", "id", userPrincipal.getId()));
             
             List<Reminder> reminders = reminderRepository.findByMedicationUserId(user.getId());
+            
             return ResponseEntity.ok(reminders);
         } catch (Exception e) {
             logger.error("Error retrieving reminders", e);
@@ -80,24 +84,38 @@ public class ReminderController {
     }
 
     @PostMapping
-    public ResponseEntity<?> createReminder(@Valid @RequestBody Reminder reminder) {
+    public ResponseEntity<?> createReminder(@Valid @RequestBody CreateReminderDto reminderDto) {
         try {
+            logger.info("Creating reminder from DTO: {}", reminderDto);
+            
             Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
             UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
+            logger.info("User authenticated: {}", userPrincipal.getId());
             
             User user = userRepository.findById(userPrincipal.getId())
                     .orElseThrow(() -> new ResourceNotFoundException("User", "id", userPrincipal.getId()));
+            logger.info("User found: {}", user.getId());
             
-            Medication medication = medicationRepository.findByIdAndUserId(reminder.getMedicationId(), user.getId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Medication", "id", reminder.getMedicationId()));
+            Medication medication = medicationRepository.findByIdAndUserId(reminderDto.getMedicationId(), user.getId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Medication", "id", reminderDto.getMedicationId()));
+            logger.info("Medication found: {}", medication.getId());
             
-            reminder.setMedication(medication);
-            reminder.setCompleted(false);
+            // Create a new Reminder object to avoid any potential issues with the incoming object
+            Reminder newReminder = new Reminder();
+            newReminder.setMedication(medication);
+            newReminder.setUser(user); // Essential: Set the user explicitly
+            newReminder.setReminderTime(reminderDto.getReminderTime());
+            newReminder.setNotes(reminderDto.getNotes());
+            newReminder.setCompleted(reminderDto.isCompleted());
             
-            Reminder savedReminder = reminderRepository.save(reminder);
+            logger.info("Prepared new reminder object with user {}, medication {}", user.getId(), medication.getId());
+            
+            Reminder savedReminder = reminderRepository.save(newReminder);
+            logger.info("Reminder saved successfully with ID: {}", savedReminder.getId());
+            
             return ResponseEntity.status(HttpStatus.CREATED).body(savedReminder);
         } catch (ResourceNotFoundException e) {
-            logger.error("Medication not found", e);
+            logger.error("Resource not found error creating reminder", e);
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body(new ErrorResponseDto(e.getMessage()));
         } catch (Exception e) {
@@ -153,6 +171,8 @@ public class ReminderController {
             reminder.setReminderTime(reminderDetails.getReminderTime());
             reminder.setNotes(reminderDetails.getNotes());
             reminder.setCompleted(reminderDetails.isCompleted());
+            reminder.setUser(user);
+            
             if (reminderDetails.isCompleted() && reminder.getCompletedAt() == null) {
                 reminder.setCompletedAt(LocalDateTime.now());
             } else if (!reminderDetails.isCompleted()) {
@@ -201,28 +221,98 @@ public class ReminderController {
     @PostMapping("/{id}/complete")
     public ResponseEntity<?> completeReminder(@PathVariable Long id) {
         try {
-            Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-            UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
+            logger.info("Starting process to mark reminder as complete: id={}", id);
             
+            // Get authenticated user
+            Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+            if (authentication == null || !(authentication.getPrincipal() instanceof UserPrincipal)) {
+                logger.error("Authentication invalid or not found");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(new ErrorResponseDto(HttpStatus.UNAUTHORIZED.value(), "User not authenticated"));
+            }
+            
+            UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
+            logger.info("User authenticated: id={}", userPrincipal.getId());
+            
+            // Retrieve user
             User user = userRepository.findById(userPrincipal.getId())
                     .orElseThrow(() -> new ResourceNotFoundException("User", "id", userPrincipal.getId()));
+            logger.info("User found: id={}", user.getId());
             
+            // Retrieve reminder with security check
+            logger.info("Looking for reminder with id={} for user={}", id, user.getId());
             Reminder reminder = reminderRepository.findByIdAndMedicationUserId(id, user.getId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Reminder", "id", id));
+                    .orElseThrow(() -> {
+                        logger.error("Reminder with id={} not found for user={}", id, user.getId());
+                        return new ResourceNotFoundException("Reminder", "id", id);
+                    });
+            logger.info("Reminder found: id={}, medication={}, current completed status={}", 
+                    reminder.getId(), 
+                    reminder.getMedication() != null ? reminder.getMedication().getId() : "null", 
+                    reminder.isCompleted());
             
+            // Update reminder status
+            boolean wasAlreadyCompleted = reminder.isCompleted();
             reminder.setCompleted(true);
-            reminder.setCompletedAt(LocalDateTime.now());
             
+            // Only set completedAt if it wasn't already completed
+            if (!wasAlreadyCompleted) {
+                LocalDateTime now = LocalDateTime.now();
+                reminder.setCompletedAt(now);
+                logger.info("Set completedAt to: {}", now);
+            } else {
+                logger.info("Reminder was already marked as completed");
+            }
+            
+            // Ensure user is set (defensive programming)
+            reminder.setUser(user);
+            
+            // Handle medication association
+            if (reminder.getMedication() == null) {
+                logger.warn("Reminder has no medication association, attempting to recover");
+                
+                if (reminder.getMedicationId() != null) {
+                    logger.info("Attempting to recover medication with ID: {}", reminder.getMedicationId());
+                    
+                    try {
+                        Medication medication = medicationRepository.findByIdAndUserId(reminder.getMedicationId(), user.getId())
+                                .orElse(null);
+                        
+                        if (medication != null) {
+                            reminder.setMedication(medication);
+                            logger.info("Successfully recovered medication: id={}, name={}", 
+                                    medication.getId(), medication.getName());
+                        } else {
+                            logger.warn("Could not find medication with id={} for user={}", 
+                                    reminder.getMedicationId(), user.getId());
+                        }
+                    } catch (Exception e) {
+                        logger.error("Error recovering medication: {}", e.getMessage(), e);
+                        // We continue even if medication recovery fails
+                    }
+                } else {
+                    logger.warn("No medication ID available for recovery");
+                }
+            } else {
+                logger.info("Reminder already has medication association: id={}, name={}", 
+                        reminder.getMedication().getId(), reminder.getMedication().getName());
+            }
+            
+            // Save the updated reminder
+            logger.info("Saving reminder with completed=true");
             Reminder completedReminder = reminderRepository.save(reminder);
+            logger.info("Reminder successfully saved with completed=true, id={}", completedReminder.getId());
+            
             return ResponseEntity.ok(completedReminder);
-        } catch (ResourceNotFoundException e) {
-            logger.error("Reminder not found", e);
+        } catch (ResourceNotFoundException ex) {
+            logger.error("Resource not found: {}", ex.getMessage());
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(new ErrorResponseDto(e.getMessage()));
-        } catch (Exception e) {
-            logger.error("Error completing reminder", e);
+                    .body(new ErrorResponseDto(HttpStatus.NOT_FOUND.value(), ex.getMessage()));
+        } catch (Exception ex) {
+            logger.error("Error completing reminder: {}", ex.getMessage(), ex);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(new ErrorResponseDto("Error completing reminder: " + e.getMessage()));
+                    .body(new ErrorResponseDto(HttpStatus.INTERNAL_SERVER_ERROR.value(), 
+                            "An error occurred while completing the reminder: " + ex.getMessage()));
         }
     }
 } 

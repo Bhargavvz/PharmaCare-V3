@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Building2,
@@ -22,11 +22,13 @@ import {
   Search,
   Menu,
   X,
+  UserPlus,
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { useAuth, isPharmacyStaffUser } from '../../context/AuthContext';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
-import { API_URL } from '../../config';
+import { pharmacyService } from '../../services/api';
+import axios from 'axios';
 import { formatDistanceToNow } from 'date-fns';
 
 interface PharmacyDto {
@@ -82,7 +84,7 @@ const getActivityIcon = (type: string) => {
 
 const PharmacyDashboard: React.FC = () => {
   const navigate = useNavigate();
-  const { currentUser, logout, token } = useAuth();
+  const { currentUser, logout, token, loading } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [pharmacies, setPharmacies] = useState<PharmacyDto[]>([]);
   const [selectedPharmacy, setSelectedPharmacy] = useState<PharmacyDto | null>(null);
@@ -99,98 +101,84 @@ const PharmacyDashboard: React.FC = () => {
   const [statsPeriodDays, setStatsPeriodDays] = useState(7);
   const [recentActivity, setRecentActivity] = useState<ActivityItemDto[]>([]);
   const [isActivityLoading, setIsActivityLoading] = useState(false);
+  const [fetchAttempts, setFetchAttempts] = useState(0);
 
-  useEffect(() => {
-    if (!currentUser || !isPharmacyStaffUser(currentUser)) {
-       if (!isLoading) {
-         toast.error('Access denied. Please log in as pharmacy staff.');
-         navigate('/pharmacy/login');
-       }
-       return;
-    }
-    
-    if (currentUser && token) { 
-        fetchPharmacies();
-    }
-  }, [currentUser, token, navigate, isLoading]);
-
-  useEffect(() => {
-    if (selectedPharmacy && token) {
-      fetchAllDashboardData();
-    } else {
-      setStats({ totalInventoryItems: 0, lowStockItems: 0, expiringItems: 0, totalSales: 0 });
-      setSalesTrendData([]);
-      setInventoryOverviewData([]);
-      setRecentActivity([]);
-    }
-  }, [selectedPharmacy, statsPeriodDays, token]);
-
-  const fetchPharmacies = async () => {
+  const fetchPharmacies = useCallback(async () => {
     try {
+      console.log('Fetching pharmacies, attempt:', fetchAttempts + 1);
       setIsLoading(true);
-      const url = `${API_URL}/pharmacies/mine`;
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch pharmacies');
+      
+      // Get token directly from localStorage as a fallback
+      const tokenToUse = token || localStorage.getItem('token');
+      
+      if (!tokenToUse) {
+        console.error('No token available for pharmacy API request');
+        throw new Error('Authentication token not found');
       }
-
-      const data = await response.json();
+      
+      const data = await pharmacyService.getMyPharmacies();
+      console.log('Pharmacies fetched successfully:', data);
+      
       setPharmacies(data);
       if (data.length > 0 && !selectedPharmacy) {
         setSelectedPharmacy(data[0]);
+      } else if (data.length === 0) {
+        toast("You are not assigned to any pharmacies yet.");
+        setSelectedPharmacy(null);
       }
+      
+      // Reset fetch attempts on success
+      setFetchAttempts(0);
     } catch (error) {
       console.error('Error fetching pharmacies:', error);
-      toast.error('Failed to load your pharmacies');
-      setPharmacies([]);
-      setSelectedPharmacy(null);
+      
+      // Increment fetch attempts for retry mechanism
+      const newAttempts = fetchAttempts + 1;
+      setFetchAttempts(newAttempts);
+      
+      if (newAttempts <= 3) {
+        // Retry after a delay (exponential backoff)
+        console.log(`Will retry in ${newAttempts * 1000}ms...`);
+        setTimeout(() => {
+          if (currentUser && isPharmacyStaffUser(currentUser)) {
+            fetchPharmacies();
+          }
+        }, newAttempts * 1000);
+      } else {
+        // After 3 attempts, show error
+        if (axios.isAxiosError(error) && error.response?.status !== 401) {
+          toast.error(`Failed to load your pharmacies: ${error.response?.data?.message || error.message}`);
+        } else if (!axios.isAxiosError(error)) {
+          toast.error('Failed to load your pharmacies');
+        }
+        setPharmacies([]);
+        setSelectedPharmacy(null);
+      }
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [token, fetchAttempts, currentUser, selectedPharmacy]);
 
-  const fetchAllDashboardData = async () => {
-    if (!selectedPharmacy || !token) return;
-    
+  const fetchAllDashboardData = useCallback(async () => {
+    if (!selectedPharmacy) return;
+
     console.log(`Fetching all dashboard data for pharmacy ID: ${selectedPharmacy.id}`);
     setIsStatsLoading(true);
     setIsActivityLoading(true);
     try {
-      const [invStatsRes, salesSummaryRes, salesTrendRes, invOverviewRes, activityRes] = await Promise.all([
-        fetch(`${API_URL}/inventories/stats?pharmacyId=${selectedPharmacy.id}`, { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch(`${API_URL}/analytics/sales/summary?pharmacyId=${selectedPharmacy.id}&period=week`, { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch(`${API_URL}/analytics/sales/trend?pharmacyId=${selectedPharmacy.id}&days=${statsPeriodDays}`, { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch(`${API_URL}/inventories/overview?pharmacyId=${selectedPharmacy.id}`, { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch(`${API_URL}/pharmacies/${selectedPharmacy.id}/activity?limit=5`, { headers: { 'Authorization': `Bearer ${token}` } })
+      const [invStats, salesSummary, salesTrend, invOverview, activityData] = await Promise.all([
+        pharmacyService.getInventoryStats(selectedPharmacy.id),
+        pharmacyService.getSalesSummary(selectedPharmacy.id, 'week'),
+        pharmacyService.getSalesTrend(selectedPharmacy.id, statsPeriodDays),
+        pharmacyService.getInventoryOverview(selectedPharmacy.id),
+        pharmacyService.getActivity(selectedPharmacy.id, 5)
       ]);
 
-      if (!invStatsRes.ok || !salesSummaryRes.ok || !salesTrendRes.ok || !invOverviewRes.ok || !activityRes.ok) {
-        if (!invStatsRes.ok) console.error("Inventory Stats fetch failed:", invStatsRes.status);
-        if (!salesSummaryRes.ok) console.error("Sales Summary fetch failed:", salesSummaryRes.status);
-        if (!salesTrendRes.ok) console.error("Sales Trend fetch failed:", salesTrendRes.status);
-        if (!invOverviewRes.ok) console.error("Inventory Overview fetch failed:", invOverviewRes.status);
-        if (!activityRes.ok) console.error("Activity fetch failed:", activityRes.status);
-        throw new Error('Failed to fetch some dashboard data');
-      }
-      
-      const invStats = await invStatsRes.json();
-      const salesSummary = await salesSummaryRes.json();
-      const salesTrend = await salesTrendRes.json();
-      const invOverview = await invOverviewRes.json();
-      const activityData = await activityRes.json();
-
       setStats({
-        totalInventoryItems: invStats.totalItems || 0,
-        lowStockItems: invStats.lowStockCount || 0,
-        expiringItems: invStats.expiringSoonCount || 0,
-        totalSales: salesSummary.totalAmount || 0,
+        totalInventoryItems: invStats?.totalItems || 0,
+        lowStockItems: invStats?.lowStockCount || 0,
+        expiringItems: invStats?.expiringSoonCount || 0,
+        totalSales: salesSummary?.totalAmount || 0,
       });
       setSalesTrendData(salesTrend || []);
       setInventoryOverviewData(invOverview || []);
@@ -198,16 +186,58 @@ const PharmacyDashboard: React.FC = () => {
 
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
-      toast.error('Failed to load some dashboard data');
+       if (axios.isAxiosError(error) && error.response?.status !== 401) {
+         toast.error(`Failed to load dashboard data: ${error.response?.data?.message || error.message}`);
+       } else if (!axios.isAxiosError(error)) {
+         toast.error('Failed to load dashboard data');
+       }
+    } finally {
+       setIsStatsLoading(false);
+       setIsActivityLoading(false);
+    }
+  }, [selectedPharmacy, statsPeriodDays]);
+
+  useEffect(() => {
+    // Don't do anything while AuthContext is still validating token
+    if (loading) {
+      console.log('AuthContext still loading, waiting...');
+      return;
+    }
+    
+    // Extra validation to ensure user is pharmacy staff
+    if (!currentUser) {
+      console.log('No current user found, redirecting to pharmacy login');
+      navigate('/pharmacy/login');
+      return;
+    }
+    
+    if (!isPharmacyStaffUser(currentUser)) {
+      console.log('User is not pharmacy staff, redirecting to pharmacy login');
+      console.log('Current user data:', JSON.stringify(currentUser, null, 2));
+      toast.error('Access denied. Please log in as pharmacy staff.');
+      navigate('/pharmacy/login');
+      return;
+    }
+    
+    console.log('PharmacyDashboard: User authenticated as pharmacy staff:', JSON.stringify(currentUser, null, 2));
+    
+    // After authentication is confirmed, fetch pharmacies if needed
+    if (currentUser && isPharmacyStaffUser(currentUser) && pharmacies.length === 0) {
+      console.log('User is pharmacy staff, fetching pharmacies');
+      fetchPharmacies();
+    }
+  }, [currentUser, navigate, loading, fetchPharmacies, pharmacies.length]);
+
+  useEffect(() => {
+    if (selectedPharmacy) {
+      fetchAllDashboardData();
+    } else {
       setStats({ totalInventoryItems: 0, lowStockItems: 0, expiringItems: 0, totalSales: 0 });
       setSalesTrendData([]);
       setInventoryOverviewData([]);
       setRecentActivity([]);
-    } finally {
-      setIsStatsLoading(false);
-      setIsActivityLoading(false);
     }
-  };
+  }, [selectedPharmacy, statsPeriodDays, fetchAllDashboardData]);
 
   const handleCreatePharmacy = () => {
     navigate('/pharmacy/create');
@@ -444,14 +474,36 @@ const PharmacyDashboard: React.FC = () => {
                     <Receipt className="h-8 w-8 text-blue-600 mb-2" />
                     <span className="text-sm font-medium text-gray-700">New Bill</span>
                 </button>
-                 <button onClick={() => navigateTo('/pharmacy/donations/pending')} className="flex flex-col items-center justify-center p-4 bg-white rounded-lg shadow hover:shadow-md transition-shadow duration-200">
+                <button onClick={() => navigateTo('/pharmacy/staff')} className="flex flex-col items-center justify-center p-4 bg-white rounded-lg shadow hover:shadow-md transition-shadow duration-200 bg-indigo-50 border-2 border-indigo-300">
+                    <Users className="h-8 w-8 text-indigo-600 mb-2" />
+                    <span className="text-sm font-medium text-indigo-800">Manage Staff</span>
+                </button>
+                <button onClick={() => navigateTo('/pharmacy/donations/pending')} className="flex flex-col items-center justify-center p-4 bg-white rounded-lg shadow hover:shadow-md transition-shadow duration-200">
                     <Heart className="h-8 w-8 text-purple-600 mb-2" />
                     <span className="text-sm font-medium text-gray-700">View Donations</span>
                 </button>
-                 <button onClick={() => navigateTo('/pharmacy/staff')} className="flex flex-col items-center justify-center p-4 bg-white rounded-lg shadow hover:shadow-md transition-shadow duration-200">
-                    <Users className="h-8 w-8 text-indigo-600 mb-2" />
-                    <span className="text-sm font-medium text-gray-700">Manage Staff</span>
-                </button>
+            </div>
+            
+            {/* Staff Management CTA Section */}
+            <div className="mt-8 p-6 bg-indigo-50 rounded-lg shadow">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between">
+                    <div className="mb-4 sm:mb-0">
+                        <h3 className="text-lg font-semibold text-indigo-800 flex items-center">
+                            <Users className="h-6 w-6 mr-2 text-indigo-600" />
+                            Pharmacy Staff Management
+                        </h3>
+                        <p className="mt-1 text-sm text-indigo-700">
+                            Add or manage staff members for your pharmacy with different roles and permissions.
+                        </p>
+                    </div>
+                    <button 
+                        onClick={() => navigateTo('/pharmacy/staff')}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-md shadow-sm flex items-center"
+                    >
+                        <UserPlus className="h-5 w-5 mr-2" />
+                        Manage Staff
+                    </button>
+                </div>
             </div>
           </div>
 

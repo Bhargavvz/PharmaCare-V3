@@ -16,8 +16,19 @@ import {
   Gift,
   LineChart,
   Building2,
+  Check,
+  Pill,
+  CheckCircle,
+  Activity,
+  UserPlus,
+  Package,
+  Edit,
+  Plus,
+FileText,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { notificationService, Notification } from '../../services/api';
+import { format, parseISO, isValid, formatDistanceToNow } from 'date-fns';
 
 interface SidebarLink {
   name: string;
@@ -29,6 +40,7 @@ const sidebarLinks: SidebarLink[] = [
   { name: 'Dashboard', to: '/dashboard', icon: Home },
   { name: 'Medications', to: '/dashboard/medications', icon: Calendar },
   { name: 'Reminders', to: '/dashboard/reminders', icon: Bell },
+  { name: 'Digi Locker', to: '/dashboard/digilocker', icon: FileText },
   { name: 'Prescriptions', to: '/dashboard/prescriptions', icon: QrCode },
   { name: 'Donations', to: '/dashboard/donations', icon: Heart },
   { name: 'Family', to: '/dashboard/family', icon: Users },
@@ -40,6 +52,8 @@ const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ children }) 
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [loading, setLoading] = useState(false);
   const location = useLocation();
   const { currentUser, logout } = useAuth();
 
@@ -54,6 +68,84 @@ const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ children }) 
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  const fetchNotifications = async () => {
+    setLoading(true);
+    try {
+      const data = await notificationService.getNotifications(8);
+      setNotifications(data);
+    } catch (error) {
+      console.error('Error fetching notifications:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchNotifications();
+  }, []);
+
+  const handleMarkAsRead = async (id: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await notificationService.markAsRead(id);
+      setNotifications(prev => 
+        prev.map(notif => 
+          notif.id === id ? { ...notif, isRead: true } : notif
+        )
+      );
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
+    }
+  };
+
+  const handleMarkAllAsRead = async () => {
+    try {
+      await notificationService.markAllAsRead();
+      setNotifications(prev => 
+        prev.map(notif => ({ ...notif, isRead: true }))
+      );
+    } catch (error) {
+      console.error('Error marking all notifications as read:', error);
+    }
+  };
+
+  const getNotificationIcon = (type: string) => {
+    switch (type?.toLowerCase()) {
+      case 'reminder_completed':
+        return { icon: CheckCircle, bg: 'bg-teal-100', color: 'text-teal-600' };
+      case 'reminder_created':
+        return { icon: Bell, bg: 'bg-violet-100', color: 'text-violet-600' };
+      case 'medication_added':
+        return { icon: Plus, bg: 'bg-sky-100', color: 'text-sky-600' };
+      case 'medication_refill':
+        return { icon: Pill, bg: 'bg-rose-100', color: 'text-rose-600' };
+      case 'medication_updated':
+        return { icon: Edit, bg: 'bg-amber-100', color: 'text-amber-600' };
+      case 'donation_created':
+        return { icon: Heart, bg: 'bg-rose-100', color: 'text-rose-600' };
+      case 'donation_status_updated':
+        return { icon: Package, bg: 'bg-indigo-100', color: 'text-indigo-600' };
+      case 'family_member_added':
+        return { icon: UserPlus, bg: 'bg-emerald-100', color: 'text-emerald-600' };
+      default:
+        return { icon: Activity, bg: 'bg-gray-100', color: 'text-gray-600' };
+    }
+  };
+
+  const getTimeAgo = (timestamp: string) => {
+    try {
+      const date = parseISO(timestamp);
+      if (isValid(date)) {
+        return formatDistanceToNow(date, { addSuffix: true });
+      }
+    } catch (error) {
+      console.error('Error parsing date:', error);
+    }
+    return 'recently';
+  };
+
+  const unreadCount = notifications.filter(notif => !notif.isRead).length;
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -152,26 +244,89 @@ const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ children }) 
               {/* Notifications */}
               <div className="relative" data-menu-button>
                 <button
-                  onClick={() => setIsNotificationsOpen(!isNotificationsOpen)}
+                  onClick={() => {
+                    setIsNotificationsOpen(!isNotificationsOpen);
+                    if (!isNotificationsOpen) {
+                      fetchNotifications();
+                    }
+                  }}
                   className="relative p-2 rounded-full text-gray-500 hover:text-gray-700 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-teal-500"
                   aria-label="View notifications"
                 >
                   <Bell className="w-5 h-5" />
-                  <span className="absolute top-1 right-1 block h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
+                  {unreadCount > 0 && (
+                    <span className="absolute top-1 right-1 block h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
+                  )}
                 </button>
                 {isNotificationsOpen && (
                   <div
-                    className="absolute right-0 mt-2 w-72 sm:w-80 origin-top-right rounded-lg shadow-lg py-1 bg-white ring-1 ring-black ring-opacity-5 focus:outline-none border border-gray-100 animate-fade-in-down"
+                    className="absolute right-0 mt-2 w-72 sm:w-80 max-h-[70vh] overflow-hidden origin-top-right rounded-lg shadow-lg bg-white ring-1 ring-black ring-opacity-5 focus:outline-none border border-gray-100 animate-fade-in-down flex flex-col"
                     role="menu" aria-orientation="vertical" aria-labelledby="notification-button" tabIndex={-1}
                     data-menu-dropdown
                   >
-                    <div className="px-4 py-2 border-b border-gray-100">
+                    <div className="px-4 py-2 border-b border-gray-100 flex justify-between items-center">
                       <h3 className="text-sm font-semibold text-gray-800">Notifications</h3>
+                      {unreadCount > 0 && (
+                        <button 
+                          onClick={handleMarkAllAsRead}
+                          className="text-xs text-teal-600 hover:text-teal-800 flex items-center"
+                        >
+                          <Check className="h-3 w-3 mr-1" />
+                          Mark all as read
+                        </button>
+                      )}
                     </div>
-                    <div className="max-h-80 overflow-y-auto">
-                      <div className="px-4 py-3 text-center text-sm text-gray-500 hover:bg-gray-50">
-                        No new notifications
-                      </div>
+                    <div className="flex-1 overflow-y-auto max-h-[60vh]">
+                      {loading ? (
+                        <div className="px-4 py-3 text-center text-sm text-gray-500">
+                          Loading notifications...
+                        </div>
+                      ) : notifications.length > 0 ? (
+                        <ul className="divide-y divide-gray-100">
+                          {notifications.map((notification) => {
+                            const { icon: Icon, bg, color } = getNotificationIcon(notification.type);
+                            return (
+                              <li 
+                                key={notification.id} 
+                                className={`px-4 py-3 hover:bg-gray-50 ${!notification.isRead ? 'bg-teal-50/30' : ''}`}
+                              >
+                                <div className="flex items-start">
+                                  <div className={`flex-shrink-0 p-2 ${bg} rounded-full`}>
+                                    <Icon className={`h-4 w-4 ${color}`} />
+                                  </div>
+                                  <div className="ml-3 flex-1 min-w-0">
+                                    <p className={`text-sm font-medium ${!notification.isRead ? 'text-gray-900' : 'text-gray-600'}`}>
+                                      {notification.title}
+                                    </p>
+                                    {notification.description && (
+                                      <p className="text-xs text-gray-500 mt-0.5">
+                                        {notification.description}
+                                      </p>
+                                    )}
+                                    <p className="text-xs text-gray-400 mt-1">
+                                      {getTimeAgo(notification.timestamp)}
+                                    </p>
+                                  </div>
+                                  {!notification.isRead && (
+                                    <button 
+                                      onClick={(e) => handleMarkAsRead(notification.id, e)}
+                                      className="flex-shrink-0 ml-2 p-1 bg-gray-100 hover:bg-gray-200 rounded-full"
+                                      title="Mark as read"
+                                    >
+                                      <Check className="h-3 w-3 text-teal-600" />
+                                    </button>
+                                  )}
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      ) : (
+                        <div className="px-4 py-6 text-center">
+                          <Bell className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+                          <p className="text-sm text-gray-500">No notifications</p>
+                        </div>
+                      )}
                     </div>
                     <div className="px-4 py-2 border-t border-gray-100">
                       <Link to="#" className="block text-center text-sm font-medium text-teal-600 hover:text-teal-700">

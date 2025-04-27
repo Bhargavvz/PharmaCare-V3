@@ -14,12 +14,20 @@ import {
   TrendingUp,
   TrendingDown,
   X,
+  Calendar,
+  Edit,
+  Clock,
+  Trash2,
+  UserPlus,
+  Package,
+  AlarmCheck,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { reminderService, analyticsService } from '../../services/api';
+import { reminderService, analyticsService, activityService, medicationService, UserActivity } from '../../services/api';
 import { toast } from 'react-hot-toast';
 import { useAuth } from '../../context/AuthContext';
-import { format, parseISO } from 'date-fns';
+import { format, parseISO, isValid, formatDistanceToNow } from 'date-fns';
+import axios from 'axios';
 
 interface DashboardStats {
   activeMedicationsCount: number;
@@ -30,10 +38,24 @@ interface DashboardStats {
 
 interface Reminder {
   id: number;
+  medicationId?: number;
   medicationName: string;
   dosage: string;
   reminderTime: string;
   reminderDateTime: string;
+  notes?: string;
+  completed: boolean;
+}
+
+interface ReminderData {
+  id: number;
+  medicationId?: number;
+  medication?: {
+    id: number;
+    name: string;
+    dosage: string;
+  };
+  reminderTime: string;
   notes?: string;
   completed: boolean;
 }
@@ -49,15 +71,12 @@ interface ActivityItem {
   iconColor: string;
 }
 
-interface ReminderData {
+interface Medication {
   id: number;
-  medication?: {
-    name: string;
-    dosage: string;
-  };
-  reminderTime: string;
-  notes?: string;
-  completed: boolean;
+  name: string;
+  dosage: string;
+  frequency?: string;
+  active: boolean;
 }
 
 const Dashboard: React.FC = () => {
@@ -79,10 +98,55 @@ const Dashboard: React.FC = () => {
   const fetchDashboardData = async () => {
     setIsLoading(true);
     try {
-      const [analyticsData, remindersData] = await Promise.all([
-        analyticsService.getDashboard(),
-        reminderService.getPending()
-      ]);
+      console.log('Fetching dashboard data...');
+      
+      // Fetch medications to have a reference for reminder medications
+      let medicationsData: any[] = [];
+      try {
+        console.log('Fetching medications data...');
+        medicationsData = await medicationService.getAll();
+        console.log('Medications data received:', medicationsData);
+      } catch (medicationsError) {
+        console.error('Error fetching medications data:', medicationsError);
+      }
+      
+      // Fetch analytics data with better error handling
+      let analyticsData;
+      try {
+        console.log('Fetching analytics data...');
+        analyticsData = await analyticsService.getDashboard();
+        console.log('Analytics data received:', analyticsData);
+      } catch (analyticsError) {
+        console.error('Error fetching analytics data:', analyticsError);
+        analyticsData = {
+          activeMedicationsCount: 0,
+          pendingRemindersCount: 0,
+          adherenceRate: 0,
+          missedRemindersCount: 0
+        };
+      }
+
+      // Fetch reminders data with better error handling
+      let remindersData;
+      try {
+        console.log('Fetching reminders data...');
+        remindersData = await reminderService.getPending();
+        console.log('Reminders data received:', remindersData);
+      } catch (remindersError) {
+        console.error('Error fetching reminders data:', remindersError);
+        remindersData = [];
+      }
+      
+      // Fetch activity data with better error handling
+      let activityData: UserActivity[] = [];
+      try {
+        console.log('Fetching activity data...');
+        activityData = await activityService.getRecentActivity(5);
+        console.log('Activity data received:', activityData);
+      } catch (activityError) {
+        console.error('Error fetching activity data:', activityError);
+        activityData = [];
+      }
 
       setStats({
         activeMedicationsCount: analyticsData.activeMedicationsCount,
@@ -91,29 +155,197 @@ const Dashboard: React.FC = () => {
         missedRemindersCount: analyticsData.missedRemindersCount
       });
       
-      setUpcomingReminders(remindersData.slice(0, 5).map((reminder: ReminderData): Reminder => ({
-        id: reminder.id,
-        medicationName: reminder.medication?.name || 'Unknown Medication',
-        dosage: reminder.medication?.dosage || '',
-        reminderTime: format(parseISO(reminder.reminderTime), 'h:mm a'),
-        reminderDateTime: reminder.reminderTime,
-        notes: reminder.notes,
-        completed: reminder.completed,
-      })).sort((a: Reminder, b: Reminder) => new Date(a.reminderDateTime).getTime() - new Date(b.reminderDateTime).getTime()));
+      // Process reminders only if we have data
+      if (Array.isArray(remindersData) && remindersData.length > 0) {
+        const formattedReminders = remindersData.slice(0, 5).map((reminder: ReminderData): Reminder => {
+          // Ensure reminder.reminderTime is valid before parsing
+          let formattedTime = 'Invalid Time';
+          let dateTimeForSorting = new Date();
+          try {
+            if (reminder.reminderTime) {
+              const parsedDate = parseISO(reminder.reminderTime);
+              if (isValid(parsedDate)) {
+                formattedTime = format(parsedDate, 'h:mm a');
+                dateTimeForSorting = parsedDate;
+              }
+            }
+          } catch (dateError) {
+            console.error('Error parsing reminder date:', dateError, reminder);
+          }
+          
+          // Find the medication name from our local list if not found in the reminder
+          let medicationName = reminder.medication?.name || 'Unknown Medication';
+          let dosage = reminder.medication?.dosage || '';
+          
+          // Try to get medication details from the separate medication list if medicationId is available
+          if (reminder.medicationId && medicationsData.length > 0 && 
+              (medicationName === 'Unknown Medication' || !dosage)) {
+            const matchingMed = medicationsData.find(med => med.id === reminder.medicationId);
+            if (matchingMed) {
+              medicationName = matchingMed.name;
+              dosage = matchingMed.dosage || dosage;
+            }
+          }
+          
+          return {
+            id: reminder.id,
+            medicationId: reminder.medicationId || reminder.medication?.id || 0,
+            medicationName: medicationName,
+            dosage: dosage,
+            reminderTime: formattedTime,
+            reminderDateTime: reminder.reminderTime,
+            notes: reminder.notes,
+            completed: reminder.completed,
+          };
+        }).sort((a: Reminder, b: Reminder) => {
+          try {
+            return new Date(a.reminderDateTime).getTime() - new Date(b.reminderDateTime).getTime();
+          } catch (error) {
+            return 0; // Default order if dates can't be compared
+          }
+        });
+        
+        console.log('Formatted reminders:', formattedReminders);
+        setUpcomingReminders(formattedReminders);
+      } else {
+        console.log('No reminders data received or empty array');
+        setUpcomingReminders([]);
+      }
       
-      setRecentActivity([
-        { id: 1, type: 'reminder', title: 'Aspirin marked as taken', description: 'Dosage: 100mg', time: '2 hours ago', icon: CheckCircle, iconBg: 'bg-teal-100', iconColor: 'text-teal-600' },
-        { id: 2, type: 'donation', title: 'Medicine donation confirmed', description: 'Thank you for your contribution!', time: '5 hours ago', icon: Heart, iconBg: 'bg-rose-100', iconColor: 'text-rose-600' },
-        { id: 3, type: 'prescription', title: 'Prescription for Metformin added', description: 'Scanned via QR code', time: '1 day ago', icon: QrCode, iconBg: 'bg-violet-100', iconColor: 'text-violet-600' },
-        { id: 4, type: 'medication', title: 'New medication added', description: 'Lisinopril 10mg', time: '2 days ago', icon: Plus, iconBg: 'bg-sky-100', iconColor: 'text-sky-600' },
-      ]);
+      // Format activity data if available, otherwise use fallback data
+      if (Array.isArray(activityData) && activityData.length > 0) {
+        const formattedActivities = activityData.map(activity => {
+          return formatActivityItem(activity);
+        });
+        setRecentActivity(formattedActivities);
+        console.log('Formatted activities:', formattedActivities);
+      } else {
+        console.log('Using fallback activity data');
+        // Use a smaller set of fallback data for better UX
+        setRecentActivity([
+          { 
+            id: 1, 
+            type: 'system', 
+            title: 'Welcome to PharmaCare+', 
+            description: 'Start tracking your medications', 
+            time: 'just now', 
+            icon: Activity, 
+            iconBg: 'bg-teal-100', 
+            iconColor: 'text-teal-600' 
+          }
+        ]);
+      }
       
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
+      if (error instanceof Error) {
+        console.error('Error details:', error.message, error.stack);
+      }
+      if (axios.isAxiosError(error) && error.response) {
+        console.error('Response status:', error.response.status);
+        console.error('Response data:', error.response.data);
+      }
       toast.error('Failed to load dashboard data. Please try again.');
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Format activity data into UI-friendly format with appropriate icons
+  const formatActivityItem = (activity: UserActivity): ActivityItem => {
+    // Default values
+    let icon = Activity;
+    let iconBg = 'bg-gray-100';
+    let iconColor = 'text-gray-600';
+    let description = activity.description || '';
+    let timeAgo = 'recently';
+    
+    // Format the relative time if timestamp exists
+    if (activity.timestamp) {
+      try {
+        const date = parseISO(activity.timestamp);
+        if (isValid(date)) {
+          // Simple format for time ago
+          const now = new Date();
+          const diffInMinutes = Math.floor((now.getTime() - date.getTime()) / (1000 * 60));
+          const diffInHours = Math.floor(diffInMinutes / 60);
+          const diffInDays = Math.floor(diffInHours / 24);
+          
+          if (diffInMinutes < 60) {
+            timeAgo = diffInMinutes === 1 ? '1 minute ago' : `${diffInMinutes} minutes ago`;
+          } else if (diffInHours < 24) {
+            timeAgo = diffInHours === 1 ? 'about 1 hour ago' : `about ${diffInHours} hours ago`;
+          } else {
+            timeAgo = diffInDays === 1 ? '1 day ago' : `${diffInDays} days ago`;
+          }
+        }
+      } catch (error) {
+        console.error('Error parsing activity timestamp:', error);
+      }
+    }
+    
+    // Configure icon and styling based on activity type
+    switch (activity.type?.toLowerCase()) {
+      case 'reminder_completed':
+        icon = CheckCircle;
+        iconBg = 'bg-teal-100';
+        iconColor = 'text-teal-600';
+        break;
+      case 'reminder_created':
+        icon = Bell;
+        iconBg = 'bg-violet-100';
+        iconColor = 'text-violet-600';
+        break;
+      case 'medication_added':
+        icon = Plus;
+        iconBg = 'bg-sky-100';
+        iconColor = 'text-sky-600';
+        break;
+      case 'medication_updated':
+        icon = Edit;
+        iconBg = 'bg-amber-100';
+        iconColor = 'text-amber-600';
+        break;
+      case 'donation_created':
+        icon = Heart;
+        iconBg = 'bg-rose-100';
+        iconColor = 'text-rose-600';
+        break;
+      case 'donation_status_updated':
+        icon = Package;
+        iconBg = 'bg-indigo-100';
+        iconColor = 'text-indigo-600';
+        break;
+      case 'family_member_added':
+        icon = UserPlus;
+        iconBg = 'bg-emerald-100';
+        iconColor = 'text-emerald-600';
+        break;
+      case 'reward_redeemed':
+        icon = Gift;
+        iconBg = 'bg-pink-100';
+        iconColor = 'text-pink-600';
+        break;
+      case 'prescription_added':
+        icon = QrCode;
+        iconBg = 'bg-violet-100';
+        iconColor = 'text-violet-600';
+        break;
+      default:
+        // Use default values set above
+        break;
+    }
+    
+    return {
+      id: activity.id,
+      type: activity.type,
+      title: activity.title,
+      description,
+      time: timeAgo,
+      icon,
+      iconBg,
+      iconColor
+    };
   };
 
   const quickActions = [
@@ -266,7 +498,7 @@ const Dashboard: React.FC = () => {
                           <p className="text-sm font-medium text-gray-900">
                             {reminder.medicationName}
                           </p>
-                          <p className="text-xs text-gray-500">{reminder.dosage}</p>
+                          {reminder.dosage && <p className="text-xs text-gray-500">{reminder.dosage}</p>}
                           {reminder.notes && <p className="text-xs text-gray-500 italic mt-0.5">{reminder.notes}</p>}
                         </div>
                       </div>
@@ -299,7 +531,7 @@ const Dashboard: React.FC = () => {
               </div>
             </div>
 
-            {/* Activity feed - Enhanced */}
+            {/* Activity feed - with fixed alignment to match screenshot */}
             <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-gray-200">
               <div className="flex items-center justify-between mb-5">
                 <h2 className="text-lg font-semibold text-gray-800">
@@ -307,23 +539,35 @@ const Dashboard: React.FC = () => {
                 </h2>
               </div>
               <div className="flow-root">
-                <ul className="-mb-6">
+                <ul className="space-y-6 relative">
                   {recentActivity.slice(0, 4).map((activity, index) => (
-                    <li key={activity.id} className={`relative ${index < recentActivity.length - 1 ? 'pb-6' : ''}`}>
-                      {index < recentActivity.length - 1 ? (
-                        <div className="absolute left-4 top-4 -ml-px mt-0.5 h-full w-0.5 bg-gray-200"></div>
-                      ) : null}
-                      <div className="relative flex items-start space-x-3">
-                        <div>
-                          <span className={`h-8 w-8 rounded-full ${activity.iconBg} flex items-center justify-center ring-4 ring-white`}>
-                            <activity.icon className={`h-4 w-4 ${activity.iconColor}`} aria-hidden="true" />
-                          </span>
+                    <li key={activity.id} className="relative">
+                      {/* Timeline connector line */}
+                      {index < recentActivity.length - 1 && (
+                        <div className="absolute z-0 left-5 top-10 bottom-0 w-0.5 bg-gray-200" 
+                             aria-hidden="true" style={{ transform: 'translateX(-50%)' }}></div>
+                      )}
+                      <div className="relative flex items-start z-10">
+                        {/* Icon */}
+                        <div className="flex-shrink-0 relative z-20">
+                          <div className={`h-10 w-10 rounded-full ${activity.iconBg} flex items-center justify-center ring-4 ring-white`}>
+                            <activity.icon className={`h-5 w-5 ${activity.iconColor}`} aria-hidden="true" />
+                          </div>
                         </div>
-                        <div className="min-w-0 flex-1 pt-1.5">
-                          <p className="text-sm text-gray-800">
+                        
+                        {/* Content */}
+                        <div className="ml-4 min-w-0 flex-1">
+                          <div className="text-base font-medium text-gray-900">
                             {activity.title}
-                          </p>
-                          <p className="mt-0.5 text-xs text-gray-500">{activity.time}</p>
+                          </div>
+                          {activity.description && (
+                            <div className="mt-0.5 text-sm text-gray-500">
+                              {activity.description}
+                            </div>
+                          )}
+                          <div className="mt-1 text-sm text-gray-600 font-normal">
+                            {activity.time}
+                          </div>
                         </div>
                       </div>
                     </li>

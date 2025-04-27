@@ -21,5 +21,31 @@ public class DonationDto {
     private String location;
     private Donation.DonationStatus status;
     private String organization;
+    private String notes;
+    private LocalDateTime donationDate;
+    private LocalDateTime completedDate;
+    private String donorName;
+    private Long userId;
     private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
+    
+    public static DonationDto fromEntity(Donation donation) {
+        return DonationDto.builder()
+                .id(donation.getId())
+                .medicineName(donation.getMedicineName())
+                .quantity(donation.getQuantity())
+                .expiryDate(donation.getExpiryDate())
+                .location(donation.getLocation())
+                .status(donation.getStatus())
+                .organization(donation.getOrganization())
+                .notes(donation.getNotes())
+                .donationDate(donation.getDonationDate())
+                .completedDate(donation.getCompletedDate())
+                .donorName(donation.getUser() != null ? 
+                    donation.getUser().getFirstName() + " " + donation.getUser().getLastName() : "Unknown")
+                .userId(donation.getUser() != null ? donation.getUser().getId() : null)
+                .createdAt(donation.getCreatedAt())
+                .updatedAt(donation.getUpdatedAt())
+                .build();
+    }
 } 

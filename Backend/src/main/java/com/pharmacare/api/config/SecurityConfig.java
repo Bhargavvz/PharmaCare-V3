@@ -50,6 +50,9 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/auth/**", "/oauth2/**", "/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         .requestMatchers("/contact", "/newsletter/subscribe").permitAll()
+                        .requestMatchers("/api/auth/**", "/api/oauth2/**", "/api/public/**").permitAll()
+                        .requestMatchers("/api/pharmacy/signup").permitAll()
+                        .requestMatchers("/api/users/me", "/api/users/profile").authenticated()
                         .anyRequest().authenticated()
                 )
                 .oauth2Login(oauth2 -> oauth2

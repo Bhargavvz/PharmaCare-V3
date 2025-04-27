@@ -10,10 +10,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@types/node": "^22.15.2",
     "@types/react-router-dom": "^5.3.3",
     "axios": "^1.8.4",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.344.0",
+    "openai": "^4.96.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-hot-toast": "^2.4.1",

@@ -178,4 +178,19 @@ public class AnalyticsController {
                     .body(new ErrorResponseDto("Failed to calculate sales summary."));
         }
     }
+
+    @GetMapping("/dashboard")
+    public ResponseEntity<?> getDashboardAnalytics() {
+        try {
+            Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+            UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
+            
+            // Delegate to the user dashboard endpoint
+            return getUserDashboardAnalytics(userPrincipal);
+        } catch (Exception e) {
+            logger.error("Error retrieving dashboard analytics", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ErrorResponseDto("Error retrieving dashboard analytics: " + e.getMessage()));
+        }
+    }
 } 
