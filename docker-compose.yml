@@ -2,27 +2,27 @@ version: '3.8'
 
 services:
   # ==========================================
-  # PostgreSQL Database
+  # PostgreSQL Database - COMMENTED OUT (using existing VM PostgreSQL)
   # ==========================================
-  postgres:
-    image: postgres:15-alpine
-    container_name: pharmacare-db
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-pharmacare}
-      POSTGRES_USER: ${POSTGRES_USER:-pharmacare}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pharmacare123}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    networks:
-      - pharmacare-network
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pharmacare} -d ${POSTGRES_DB:-pharmacare}" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+  # postgres:
+  #   image: postgres:15-alpine
+  #   container_name: pharmacare-db
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_DB: ${POSTGRES_DB:-pharmacare}
+  #     POSTGRES_USER: ${POSTGRES_USER:-pharmacare}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pharmacare123}
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   ports:
+  #     - "5432:5432"
+  #   networks:
+  #     - pharmacare-network
+  #   healthcheck:
+  #     test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pharmacare} -d ${POSTGRES_DB:-pharmacare}" ]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
 
   # ==========================================
   # Redis Cache
@@ -52,11 +52,13 @@ services:
       dockerfile: Dockerfile
     container_name: pharmacare-backend
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      # Database Configuration
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-pharmacare}
-      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-pharmacare}
-      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-pharmacare123}
+      # Database Configuration - connecting to HOST PostgreSQL
+      SPRING_DATASOURCE_URL: jdbc:postgresql://host.docker.internal:5432/${POSTGRES_DB:-pharmacare}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-Nani2005}
 
       # Redis Configuration
       SPRING_DATA_REDIS_HOST: redis
@@ -83,8 +85,6 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
@@ -142,5 +142,4 @@ networks:
     driver: bridge
 
 volumes:
-  postgres_data:
   redis_data:
