@@ -24,7 +24,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 @RestController
-@RequestMapping("/donations")
+@RequestMapping("/api/donations")
 @RequiredArgsConstructor
 public class DonationController {
 

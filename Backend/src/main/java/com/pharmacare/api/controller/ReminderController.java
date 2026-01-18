@@ -26,7 +26,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 @RestController
-@RequestMapping("/reminders")
+@RequestMapping("/api/reminders")
 @RequiredArgsConstructor
 public class ReminderController {
 

@@ -1,0 +1,28 @@
+# Ignore target folder - will build fresh in container
+target/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# Maven wrapper (not needed in docker)
+.mvn/
+mvnw
+mvnw.cmd
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files are excluded by default with -DskipTests

@@ -9,13 +9,6 @@ build/
 dist/
 node_modules/
 
-# Environment files
-.env
-.env.local
-.env.*.local
-application.properties
-!application.properties.template
-
 # Logs
 *.log
 npm-debug.log*
@@ -76,8 +69,6 @@ replay_pid*
 
 # VS Code
 
-# Spring Boot
-application-*.properties
 
 # Frontend build
 /Frontend/dist/
@@ -91,4 +82,10 @@ Thumbs.db
 Backend/target/
 
 # Local configuration files (for secrets)
-Backend/src/main/resources/application-local.properties 
+Backend/src/main/resources/application-local.properties
+
+# Docker
+nginx/ssl/
+*.pem
+*.key
+*.crt 

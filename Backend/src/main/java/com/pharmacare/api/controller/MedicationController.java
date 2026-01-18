@@ -20,7 +20,7 @@ import jakarta.validation.Valid;
 import java.util.List;
 
 @RestController
-@RequestMapping("/medications")
+@RequestMapping("/api/medications")
 @RequiredArgsConstructor
 public class MedicationController {
 

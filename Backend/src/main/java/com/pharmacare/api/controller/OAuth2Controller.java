@@ -25,7 +25,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 @RestController
-@RequestMapping("/oauth2")
+@RequestMapping("/api/oauth2")
 @RequiredArgsConstructor
 public class OAuth2Controller {
 

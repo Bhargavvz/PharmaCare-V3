@@ -37,7 +37,7 @@ import lombok.Data;
 import lombok.RequiredArgsConstructor;
 
 @RestController
-@RequestMapping("/pharmacies")
+@RequestMapping("/api/pharmacies")
 @RequiredArgsConstructor
 public class PharmacyController {
 
