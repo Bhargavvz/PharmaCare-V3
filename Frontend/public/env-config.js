@@ -1,3 +1,3 @@
 window._env_ = {
-    REACT_APP_API_URL: "http://3.82.104.125/api"
+    REACT_APP_API_URL: "https://pharmacaree.live/api"
 };
