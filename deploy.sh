@@ -84,7 +84,55 @@ docker --version
 docker compose version
 
 # ==========================================
-# Step 4: Setup Environment
+# Step 4: Configure PostgreSQL for Docker (if using existing VM PostgreSQL)
+# ==========================================
+echo ""
+print_status "Configuring PostgreSQL for Docker connections..."
+
+# Check if PostgreSQL is installed
+if command -v psql &> /dev/null; then
+    print_status "PostgreSQL detected. Configuring for Docker..."
+    
+    # Find PostgreSQL config directory
+    PG_VERSION=$(psql --version | grep -oP '\d+' | head -1)
+    PG_HBA="/etc/postgresql/${PG_VERSION}/main/pg_hba.conf"
+    PG_CONF="/etc/postgresql/${PG_VERSION}/main/postgresql.conf"
+    
+    # Backup configs
+    sudo cp "$PG_HBA" "${PG_HBA}.backup" 2>/dev/null || true
+    sudo cp "$PG_CONF" "${PG_CONF}.backup" 2>/dev/null || true
+    
+    # Add Docker network access to pg_hba.conf if not already present
+    if ! sudo grep -q "172.16.0.0/12" "$PG_HBA" 2>/dev/null; then
+        echo "host    all    all    172.16.0.0/12    md5" | sudo tee -a "$PG_HBA"
+        print_status "Added Docker network to pg_hba.conf"
+    else
+        print_status "Docker network already configured in pg_hba.conf"
+    fi
+    
+    # Set listen_addresses = '*' in postgresql.conf
+    if sudo grep -q "^listen_addresses" "$PG_CONF" 2>/dev/null; then
+        sudo sed -i "s/^listen_addresses.*/listen_addresses = '*'/" "$PG_CONF"
+    else
+        echo "listen_addresses = '*'" | sudo tee -a "$PG_CONF"
+    fi
+    print_status "Set listen_addresses = '*' in postgresql.conf"
+    
+    # Restart PostgreSQL
+    sudo systemctl restart postgresql
+    print_status "PostgreSQL restarted"
+    
+    # Create pharmacare database if it doesn't exist
+    sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = 'pharmacare'" | grep -q 1 || \
+        sudo -u postgres psql -c "CREATE DATABASE pharmacare;"
+    print_status "Database 'pharmacare' ready"
+    
+else
+    print_warning "PostgreSQL not found - using Docker container for PostgreSQL"
+fi
+
+# ==========================================
+# Step 5: Setup Environment
 # ==========================================
 echo ""
 print_status "Setting up environment..."
@@ -107,14 +155,22 @@ else
 fi
 
 # ==========================================
-# Step 5: Create SSL directory
+# Step 6: Create SSL directory
 # ==========================================
 echo ""
 print_status "Creating SSL directory..."
 mkdir -p nginx/ssl
 
 # ==========================================
-# Step 6: Build and Start Containers
+# Step 7: Clean up old containers (if any)
+# ==========================================
+echo ""
+print_status "Cleaning up old containers..."
+docker compose down 2>/dev/null || true
+docker container prune -f 2>/dev/null || true
+
+# ==========================================
+# Step 8: Build and Start Containers
 # ==========================================
 echo ""
 print_status "Building Docker images..."
@@ -125,14 +181,14 @@ print_status "Starting containers..."
 docker compose up -d
 
 # ==========================================
-# Step 7: Wait for services to be healthy
+# Step 9: Wait for services to be healthy
 # ==========================================
 echo ""
 print_status "Waiting for services to start..."
 sleep 30
 
 # ==========================================
-# Step 8: Check service status
+# Step 10: Check service status
 # ==========================================
 echo ""
 print_status "Checking service status..."
@@ -148,6 +204,7 @@ echo "  - http://$(curl -s ifconfig.me 2>/dev/null || echo 'YOUR_EC2_PUBLIC_IP')
 echo ""
 echo "Useful commands:"
 echo "  - View logs:        docker compose logs -f"
+echo "  - Backend logs:     docker compose logs backend"
 echo "  - Stop services:    docker compose down"
 echo "  - Restart services: docker compose restart"
 echo "  - Update app:       git pull && docker compose up -d --build"
